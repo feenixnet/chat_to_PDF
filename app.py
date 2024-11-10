@@ -1,3 +1,5 @@
+# app.py
+
 import streamlit as st
 from langchain.chains import create_retrieval_chain
 from pinecone import Pinecone, Index, ServerlessSpec
@@ -6,6 +8,7 @@ from models import Models
 from ingest import ingest_file
 import os
 import time
+from transformers import pipeline, Pipeline
 
 # Load the environment variables
 from dotenv import load_dotenv
@@ -43,13 +46,19 @@ if uploaded_file:
         f.write(uploaded_file.getbuffer())
     st.sidebar.success(f"Uploaded {uploaded_file.name}")
 
-# Model selection section
-model_options = ["ollama-llama", "other_model"]  # Update with actual model names
-selected_model = st.sidebar.selectbox("Choose the model", model_options)
+# Embedding model selection
+embedding_model_options = ["ollama-llama", "distilbert", "cohere"]
+selected_embedding_model = st.sidebar.selectbox(
+    "Choose the embedding model", embedding_model_options
+)
 
-# Initialize selected model
-embeddings = models.get_embedding_model(selected_model)
-llm = models.get_chat_model(selected_model)
+# Chat model selection
+chat_model_options = ["ollama-llama", "gpt2", "gpt-neo-125M"]
+selected_chat_model = st.sidebar.selectbox("Choose the chat model", chat_model_options)
+
+# Initialize selected models for embeddings and chat
+embeddings = models.get_embedding_model(selected_embedding_model)
+llm = models.get_chat_model(selected_chat_model)
 
 # Ingest PDF if uploaded
 if uploaded_file and st.sidebar.button("Ingest PDF"):
@@ -91,8 +100,11 @@ def query_with_retry(retrieve_func, query_text, llm, retries=3):
             # Combine unique documents into context for the LLM chain
             context = " ".join(context_docs)
 
-            # Display the context retrieved for debugging
-            # st.write("Retrieved Context for Debugging:", context)
+            # General-purpose message format for user queries
+            if isinstance(llm, Pipeline):  # Check if it's Hugging Face pipeline
+                input_text = f"Context: {context}\n\nUser question: {query_text}"
+                response = llm(input_text, max_new_tokens=50, do_sample=True)
+                return response[0]["generated_text"] if response else "No response."
 
             # General-purpose message format for user queries
             messages = [
@@ -123,5 +135,14 @@ if st.button("Submit") and query:
     result = query_with_retry(retrieve_from_pinecone, query, llm)
     print("result", result)
 
-    if result:
-        st.write("**Answer:** ", result.content)
+    # Check if result has `content` attribute or is a plain string
+    if isinstance(result, str):
+        st.write(
+            "**Answer:** ", result
+        )  # For string responses from Hugging Face models
+    elif hasattr(result, "content"):
+        st.write(
+            "**Answer:** ", result.content
+        )  # For responses with a `content` attribute
+    else:
+        st.write("**Answer:** Unable to retrieve a proper response.")
